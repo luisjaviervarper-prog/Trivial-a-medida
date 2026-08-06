@@ -198,8 +198,9 @@
   .modal p{ font-size:14px; line-height:1.5; margin:0 0 12px; }
   .modal-actions{ display:flex; gap:10px; margin-top:16px; }
   .modal-actions .btn{ margin-top:0; }
-  .sample-table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:14px; }
-  .sample-table th, .sample-table td{ border:1px solid var(--gray-line); padding:6px 8px; text-align:left; }
+  .sample-table-wrap{ overflow-x:auto; margin-bottom:14px; -webkit-overflow-scrolling:touch; }
+  .sample-table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:0; }
+  .sample-table th, .sample-table td{ border:1px solid var(--gray-line); padding:6px 8px; text-align:left; white-space:nowrap; }
   .sample-table th{ background:var(--gray-bg); font-family:var(--font-mono); color:var(--ink); }
   .tips{ padding-left:18px; font-size:13.5px; line-height:1.55; margin:0 0 6px; color:var(--ink); }
 
@@ -254,6 +255,27 @@
   .qa-result-row{ display:flex; gap:10px; }
   .qa-result-row .btn{ margin-top:0; }
 
+  /* ---- opciones (4 alternativas) ---- */
+  .qa-options{ display:flex; flex-direction:column; gap:10px; margin-bottom:4px; }
+  .qa-option{
+    display:flex; align-items:center; text-align:left; gap:10px; width:100%;
+    background:var(--white); color:var(--ink); border:1.5px solid var(--gray-line); border-radius:var(--radius-md);
+    font-family:var(--font-body); font-weight:600; font-size:15.5px; line-height:1.35;
+    padding:13px 14px; cursor:pointer; transition:border-color .12s ease, background .12s ease, transform .12s ease;
+  }
+  .qa-option:not(:disabled):hover{ border-color:var(--red); background:var(--red-soft); }
+  .qa-option:active{ transform:scale(.98); }
+  .qa-option:disabled{ cursor:not-allowed; }
+  .qa-option.correct{ border-color:var(--success); background:#E6F3EA; color:var(--success); font-weight:700; }
+  .qa-option.wrong{ border-color:var(--red); background:var(--red-soft); color:var(--red-dark); font-weight:700; }
+  .qa-option-letter{
+    display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;
+    width:24px; height:24px; border-radius:50%; background:var(--gray-bg); color:var(--gray);
+    font-family:var(--font-mono); font-size:12.5px; font-weight:700;
+  }
+  .qa-option.correct .qa-option-letter{ background:var(--success); color:var(--white); }
+  .qa-option.wrong .qa-option-letter{ background:var(--red-dark); color:var(--white); }
+
   /* ---- end screen ---- */
   .winner-banner{ text-align:center; margin:10px 0 22px; }
   .winner-title{ font-family:var(--font-display); font-weight:800; font-size:clamp(20px,6vw,26px); color:var(--ink); }
@@ -302,20 +324,37 @@ const PALETTE = ['#DA291C','#3E5C6B','#8B8B8D','#A31E14','#5B6B72','#C98B2E'];
 const TEAM_COLORS = PALETTE;
 
 /* ================= almacenamiento persistente ================= */
+const STORAGE_PREFIX = 'trivial-a-medida:';
 const hasStorage = !!(window.storage && typeof window.storage.get === 'function' && typeof window.storage.set === 'function');
+const hasLocalStorage = (() => {
+  try{
+    const k = '__trivial_a_medida_test__';
+    window.localStorage.setItem(k, '1');
+    window.localStorage.removeItem(k);
+    return true;
+  }catch(e){ return false; }
+})();
 const memoryStore = new Map();
 
 async function storageGet(key){
   if (hasStorage){
     try{ const r = await window.storage.get(key, false); return r ? r.value : null; }
-    catch(e){ return null; }
+    catch(e){ /* seguir con el siguiente nivel de almacenamiento */ }
+  }
+  if (hasLocalStorage){
+    try{ return window.localStorage.getItem(STORAGE_PREFIX + key); }
+    catch(e){ /* seguir con el siguiente nivel de almacenamiento */ }
   }
   return memoryStore.has(key) ? memoryStore.get(key) : null;
 }
 async function storageSet(key, value){
   if (hasStorage){
     try{ await window.storage.set(key, value, false); return true; }
-    catch(e){ return false; }
+    catch(e){ /* seguir con el siguiente nivel de almacenamiento */ }
+  }
+  if (hasLocalStorage){
+    try{ window.localStorage.setItem(STORAGE_PREFIX + key, value); return true; }
+    catch(e){ /* almacenamiento lleno o bloqueado: seguir con memoria */ }
   }
   memoryStore.set(key, value);
   return true;
@@ -323,14 +362,18 @@ async function storageSet(key, value){
 async function storageDelete(key){
   if (hasStorage){
     try{ await window.storage.delete(key, false); return true; }
-    catch(e){ return false; }
+    catch(e){ /* seguir con el siguiente nivel de almacenamiento */ }
+  }
+  if (hasLocalStorage){
+    try{ window.localStorage.removeItem(STORAGE_PREFIX + key); return true; }
+    catch(e){ /* seguir con el siguiente nivel de almacenamiento */ }
   }
   memoryStore.delete(key);
   return true;
 }
 function hasStorageNote(){
-  return hasStorage
-    ? 'Tus mazos y tu progreso se guardan automáticamente en tu cuenta.'
+  return (hasStorage || hasLocalStorage)
+    ? 'Tus mazos y tu progreso se guardan automáticamente en este dispositivo, aunque cierres la app.'
     : 'Este navegador no admite guardado permanente: tus mazos se perderán al cerrar esta ventana.';
 }
 
@@ -385,29 +428,62 @@ async function parseWorkbookFile(file){
   if (headerIdx >= rows.length) throw new Error('El archivo está vacío.');
 
   const header = rows[headerIdx].map(normalizeHeader);
-  const col = { nivel:-1, tema:-1, pregunta:-1, respuesta:-1 };
+  const col = {
+    nivel:-1, tema:-1, pregunta:-1, respuesta:-1,
+    opcionA:-1, opcionB:-1, opcionC:-1, opcionD:-1, correcta:-1,
+  };
   header.forEach((h, i) => {
     if (col.nivel === -1 && h.includes('nivel')) col.nivel = i;
     else if (col.tema === -1 && h.includes('tema')) col.tema = i;
     else if (col.pregunta === -1 && h.includes('pregunta')) col.pregunta = i;
+    else if (col.correcta === -1 && h.includes('correcta')) col.correcta = i;
+    else if (col.opcionA === -1 && (h.includes('opciona') || h.includes('opcion1'))) col.opcionA = i;
+    else if (col.opcionB === -1 && (h.includes('opcionb') || h.includes('opcion2'))) col.opcionB = i;
+    else if (col.opcionC === -1 && (h.includes('opcionc') || h.includes('opcion3'))) col.opcionC = i;
+    else if (col.opcionD === -1 && (h.includes('opciond') || h.includes('opcion4'))) col.opcionD = i;
     else if (col.respuesta === -1 && h.includes('respuesta')) col.respuesta = i;
   });
-  if (col.nivel === -1 || col.tema === -1 || col.pregunta === -1 || col.respuesta === -1){
-    throw new Error('No se han encontrado las columnas Nivel, Tema, Pregunta y Respuesta en la primera fila con datos.');
+
+  const hasOptionCols = col.opcionA !== -1 && col.opcionB !== -1 && col.opcionC !== -1 && col.opcionD !== -1 && col.correcta !== -1;
+
+  if (col.nivel === -1 || col.tema === -1 || col.pregunta === -1){
+    throw new Error('No se han encontrado las columnas Nivel, Tema y Pregunta en la primera fila con datos.');
+  }
+  if (!hasOptionCols && col.respuesta === -1){
+    throw new Error('No se han encontrado las columnas necesarias. Usa el formato "Nivel, Tema, Pregunta, Respuesta" o el formato "Nivel, Tema, Pregunta, OpcionA, OpcionB, OpcionC, OpcionD, Correcta".');
   }
 
+  const letterToIndex = { A:0, B:1, C:2, D:3 };
   const questions = [];
   for (let r = headerIdx + 1; r < rows.length; r++){
     const row = rows[r];
     if (!row || row.every(c => String(c).trim() === '')) continue;
     const pregunta = String(row[col.pregunta] ?? '').trim();
-    const respuesta = String(row[col.respuesta] ?? '').trim();
-    if (!pregunta || !respuesta) continue;
+    if (!pregunta) continue;
     const nivel = String(row[col.nivel] ?? '').trim() || 'Sin nivel';
     const tema = String(row[col.tema] ?? '').trim() || 'General';
-    questions.push({ id:'q' + r + '_' + Math.random().toString(36).slice(2, 8), nivel, tema, pregunta, respuesta });
+
+    if (hasOptionCols){
+      const opciones = [col.opcionA, col.opcionB, col.opcionC, col.opcionD].map(ci => String(row[ci] ?? '').trim());
+      if (opciones.some(o => !o)) continue; // faltan opciones: fila inválida
+      const rawCorrecta = String(row[col.correcta] ?? '').trim();
+      let correctaIndex = letterToIndex.hasOwnProperty(rawCorrecta.toUpperCase()) ? letterToIndex[rawCorrecta.toUpperCase()] : -1;
+      if (correctaIndex === -1){
+        correctaIndex = opciones.findIndex(o => o.toLowerCase() === rawCorrecta.toLowerCase());
+      }
+      if (correctaIndex === -1) continue; // no se pudo determinar la opción correcta
+      questions.push({
+        id:'q' + r + '_' + Math.random().toString(36).slice(2, 8),
+        nivel, tema, pregunta, tipo:'opciones', opciones, correctaIndex,
+        respuesta: opciones[correctaIndex],
+      });
+    } else {
+      const respuesta = String(row[col.respuesta] ?? '').trim();
+      if (!respuesta) continue;
+      questions.push({ id:'q' + r + '_' + Math.random().toString(36).slice(2, 8), nivel, tema, pregunta, respuesta, tipo:'abierta' });
+    }
   }
-  if (!questions.length) throw new Error('No se ha encontrado ninguna pregunta válida (revisa que Pregunta y Respuesta no estén vacías).');
+  if (!questions.length) throw new Error('No se ha encontrado ninguna pregunta válida. Revisa que las columnas obligatorias tengan datos en cada fila.');
   return questions;
 }
 
@@ -514,6 +590,15 @@ function nextTeamIndex(from){
   }
   return -1;
 }
+function buildOptionsView(q){
+  const items = q.opciones.map((text, idx) => ({ text, correct: idx === q.correctaIndex }));
+  return shuffleArray(items);
+}
+function prepareQuestionState(){
+  const q = state.game.currentQuestion;
+  state.game.optionsView = (q && q.tipo === 'opciones') ? buildOptionsView(q) : null;
+  state.game.selectedIndex = null;
+}
 function startTurn(){
   const topics = pickTopics();
   if (!topics.length){ finishGame(); return; }
@@ -521,16 +606,20 @@ function startTurn(){
     state.game.phase = 'question';
     state.game.topicChoices = topics;
     state.game.currentQuestion = pickQuestionForTopic(topics[0]);
+    prepareQuestionState();
   } else {
     state.game.phase = 'choose';
     state.game.topicChoices = topics;
     state.game.currentQuestion = null;
+    state.game.optionsView = null;
+    state.game.selectedIndex = null;
   }
   render();
 }
 function chooseTopic(tema){
   state.game.currentQuestion = pickQuestionForTopic(tema);
   state.game.phase = 'question';
+  prepareQuestionState();
   render();
 }
 async function markResult(correct){
@@ -644,19 +733,35 @@ function emptyState(){
 function formatInfoModal(){
   return modalWrapper(`
     <h2>Formato del archivo</h2>
-    <p>El Excel o CSV debe tener estas 4 columnas en la primera fila con datos (el orden no importa, pero los nombres sí):</p>
-    <table class="sample-table">
-      <thead><tr><th>Nivel</th><th>Tema</th><th>Pregunta</th><th>Respuesta</th></tr></thead>
-      <tbody>
-        <tr><td>1</td><td>Verbos</td><td>¿Cómo se dice "comer"?</td><td>To eat</td></tr>
-        <tr><td>1</td><td>Comida</td><td>¿Cómo se dice "manzana"?</td><td>Apple</td></tr>
-        <tr><td>2</td><td>Verbos</td><td>Pasado de "go"</td><td>Went</td></tr>
-      </tbody>
-    </table>
+    <p>Hay dos formatos válidos, según el tipo de juego que quieras crear. El Excel o CSV debe tener estas columnas en la primera fila con datos (el orden no importa, pero los nombres sí):</p>
+
+    <p><strong>1. Respuesta abierta</strong> (se muestra la pregunta, y luego se revela la respuesta):</p>
+    <div class="sample-table-wrap">
+      <table class="sample-table">
+        <thead><tr><th>Nivel</th><th>Tema</th><th>Pregunta</th><th>Respuesta</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Verbos</td><td>¿Cómo se dice "comer"?</td><td>To eat</td></tr>
+          <tr><td>2</td><td>Verbos</td><td>Pasado de "go"</td><td>Went</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>2. Opción múltiple</strong> (se muestran 4 opciones para elegir):</p>
+    <div class="sample-table-wrap">
+      <table class="sample-table">
+        <thead><tr><th>Nivel</th><th>Tema</th><th>Pregunta</th><th>OpcionA</th><th>OpcionB</th><th>OpcionC</th><th>OpcionD</th><th>Correcta</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Verbos</td><td>¿Cómo se dice "comer"?</td><td>To eat</td><td>To sleep</td><td>To run</td><td>To sell</td><td>A</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>En la columna <strong>Correcta</strong> puedes poner la letra de la opción correcta (A, B, C o D) o escribir el texto exacto de la opción correcta.</p>
+
     <ul class="tips">
       <li>Se usa la primera hoja del archivo.</li>
-      <li>Los niveles pueden llamarse como quieras: 1, 2, 3… o A1, B2…</li>
-      <li>Las filas vacías o sin pregunta/respuesta se ignoran.</li>
+      <li>Los niveles pueden llamarse como quieras: 1, 2, 3… o Fácil, Intermedio, Difícil…</li>
+      <li>Las filas vacías o incompletas se ignoran.</li>
+      <li>Cada archivo debe usar un único formato (todo respuesta abierta o todo opción múltiple).</li>
       <li>Puedes importar tantos archivos como quieras: cada uno será un mazo con su propio nombre, y podrás elegir entre ellos.</li>
     </ul>
     <button class="btn btn-primary" data-action="close-modal">Entendido</button>
@@ -764,6 +869,35 @@ function renderPlay(){
       </div>`;
   } else {
     const q = g.currentQuestion;
+    let bodyHtml;
+    if (q.tipo === 'opciones'){
+      const answered = g.phase === 'answered';
+      const letters = ['A', 'B', 'C', 'D'];
+      bodyHtml = `
+        <div class="qa-options">
+          ${g.optionsView.map((opt, idx) => {
+            let cls = 'qa-option';
+            if (answered){
+              if (opt.correct) cls += ' correct';
+              else if (idx === g.selectedIndex) cls += ' wrong';
+            }
+            return `<button class="${cls}" data-action="select-option" data-idx="${idx}" ${answered ? 'disabled' : ''}>
+              <span class="qa-option-letter">${letters[idx]}</span><span>${esc(opt.text)}</span>
+            </button>`;
+          }).join('')}
+        </div>
+        ${answered ? `<button class="btn btn-primary" data-action="next-question">Siguiente</button>` : ''}`;
+    } else {
+      bodyHtml = g.phase === 'question'
+        ? `<button class="btn btn-primary" data-action="reveal-answer">Mostrar respuesta</button>`
+        : `
+          <div class="qa-divider"></div>
+          <div class="qa-answer">${esc(q.respuesta)}</div>
+          <div class="qa-result-row">
+            <button class="btn btn-success" data-action="mark-correct">✅ Acertó</button>
+            <button class="btn btn-danger" data-action="mark-wrong">❌ Falló</button>
+          </div>`;
+    }
     phaseHtml = `
       <div class="turn-banner">Turno de <strong>${esc(g.teams[g.turnIndex].name)}</strong></div>
       <div class="qa-card">
@@ -772,15 +906,7 @@ function renderPlay(){
           <span class="qa-tab qa-tab-mono">${esc(q.tema)}</span>
         </div>
         <div class="qa-question">${esc(q.pregunta)}</div>
-        ${g.phase === 'question'
-          ? `<button class="btn btn-primary" data-action="reveal-answer">Mostrar respuesta</button>`
-          : `
-            <div class="qa-divider"></div>
-            <div class="qa-answer">${esc(q.respuesta)}</div>
-            <div class="qa-result-row">
-              <button class="btn btn-success" data-action="mark-correct">✅ Acertó</button>
-              <button class="btn btn-danger" data-action="mark-wrong">❌ Falló</button>
-            </div>`}
+        ${bodyHtml}
       </div>`;
   }
 
@@ -864,6 +990,16 @@ const handlers = {
   'reveal-answer': () => { state.game.phase = 'answer'; render(); },
   'mark-correct': () => markResult(true),
   'mark-wrong': () => markResult(false),
+  'select-option': (el) => {
+    if (state.game.selectedIndex !== null) return;
+    state.game.selectedIndex = Number(el.dataset.idx);
+    state.game.phase = 'answered';
+    render();
+  },
+  'next-question': () => {
+    const correct = state.game.optionsView[state.game.selectedIndex].correct;
+    markResult(correct);
+  },
   'play-again': () => restartGame(),
   'quit-game': () => { state.confirmQuit = true; render(); },
   'confirm-quit-yes': () => { state.confirmQuit = false; state.screen = 'home'; render(); },
