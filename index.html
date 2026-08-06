@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trivial a medida</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#DA291C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Trivial a medida">
 <meta http-equiv="refresh" content="0; url=trivial-a-medida.html">
 <script>location.replace('trivial-a-medida.html');</script>
 <style>
@@ -25,5 +31,10 @@
     <p>Abriendo el juego…</p>
     <p><a href="trivial-a-medida.html">Pulsa aquí si no se abre automáticamente</a></p>
   </div>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>
